@@ -1,0 +1,11 @@
+# Google Colab already provides all of these. For a local install:
+#   pip install -r requirements.txt
+tensorflow>=2.16      # Keras 3
+numpy
+pandas
+scikit-learn
+matplotlib
+pillow
+requests
+folium                # optional: interactive priority map
+jupyter

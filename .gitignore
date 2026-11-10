@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project data and generated outputs (re-creatable from the notebooks)
+/data/
+/outputs/
