@@ -13,14 +13,14 @@ HERE = Path(__file__).parent
 
 def nb(cells):
     out = []
-    for kind, src in cells:
+    for i, (kind, src) in enumerate(cells):
         src = dedent(src).strip("\n")
         lines = [l + "\n" for l in src.split("\n")]
         lines[-1] = lines[-1].rstrip("\n")
         if kind == "md":
-            out.append({"cell_type": "markdown", "metadata": {}, "source": lines})
+            out.append({"cell_type": "markdown", "id": f"cell-{i:02d}", "metadata": {}, "source": lines})
         else:
-            out.append({"cell_type": "code", "metadata": {}, "execution_count": None,
+            out.append({"cell_type": "code", "id": f"cell-{i:02d}", "metadata": {}, "execution_count": None,
                         "outputs": [], "source": lines})
     return {
         "cells": out,
@@ -59,11 +59,23 @@ else:
     REPO_DIR = os.path.abspath("..")
 
 sys.path.insert(0, os.path.join(REPO_DIR, "src"))
+
+# --- LITE_MODE: quick CPU test of the whole pipeline -------------------------------------
+# Lite = 30 images/species at 160 px, 3+2 epochs, small API samples; runs in ~10 min on a
+# laptop CPU. Same code paths as the full run, but the numbers are NOT meaningful for the
+# write-up. Lite data/outputs go to separate *_lite folders, so they never mix with a full run.
+#   None  -> auto: lite when running locally, full on Colab
+#   True / False -> force. Restart the kernel after changing it.
+LITE_MODE = None
+if LITE_MODE is None:
+    LITE_MODE = os.environ.get("POLLINATOR_LITE", "0" if IN_COLAB else "1") in ("1", "true", "True")
+os.environ["POLLINATOR_LITE"] = "1" if LITE_MODE else "0"
 # Optional: official IUCN Red List API token (otherwise iNaturalist's IUCN mirror is used)
 # os.environ["IUCN_API_TOKEN"] = "..."   # on Colab, prefer: from google.colab import userdata
 
 from pollinator_id import config
 config.ensure_dirs()
+print("MODE   ->", "LITE (CPU smoke test - results not meaningful)" if config.LITE else "FULL")
 print("data   ->", config.DATA_DIR)
 print("output ->", config.OUTPUT_DIR)
 ''')
@@ -123,7 +135,7 @@ iucn_table[["scientific_name", "common_name", "iucn_code", "iucn_category", "thr
 '''),
     ("md", '''
 ## 2. Training images
-Up to `IMAGES_PER_CLASS` of the most recent research-grade observations per species
+Up to `IMAGES_PER_CLASS` (400; lite: 30) of the most recent research-grade observations per species
 (CC0 / CC-BY / CC-BY-NC photos, wild organisms only). Only the **first photo** of each
 observation is used so the same individual cannot appear in both train and test.
 Re-running is safe: existing metadata and images are reused.
@@ -151,20 +163,20 @@ meta.groupby(["label", "split"]).size().unstack()[["train", "val", "test"]]
 '''),
     ("md", '''
 ## 3. Occurrence sample for the conservation rule engine
-Up to 200 research-grade records **per species per year** (coordinates only, no images).
+Up to `OCC_PER_YEAR` research-grade records **per species per year** over the last `OCC_YEARS_BACK` years (coordinates only, no images).
 Stratifying by year keeps abundant species from being represented only by recent records,
 which the "possible local decline" rule needs. Common species are included on purpose:
 they act as a proxy for **survey effort** in each area.
 
-*~13 years x 12 species = ~160 API calls, about 3-4 minutes.*
+*Full mode: 14 years x 12 species = ~170 API calls, about 3-4 minutes (lite: ~1 minute).*
 '''),
     ("code", '''
 from datetime import date
-YEARS = range(2012, date.today().year + 1)
+YEARS = range(date.today().year - config.OCC_YEARS_BACK + 1, date.today().year + 1)
 if config.OCCURRENCES_CSV.exists():
     occ = pd.read_csv(config.OCCURRENCES_CSV)
 else:
-    occ = pd.concat([inaturalist.collect_occurrences(client, n, YEARS, per_year=200) for n in CLASS_NAMES],
+    occ = pd.concat([inaturalist.collect_occurrences(client, n, YEARS, per_year=config.OCC_PER_YEAR) for n in CLASS_NAMES],
                     ignore_index=True)
     occ.to_csv(config.OCCURRENCES_CSV, index=False)
 print(len(occ), "occurrence records;", f"{occ.coordinates_obscured.mean():.1%} with obscured coordinates")
@@ -237,14 +249,14 @@ class weights and two-phase schedule**:
 
 | Phase | Backbone | Learning rate | Epochs (max) |
 |---|---|---|---|
-| 1. Feature extraction | frozen | 1e-3 | 8 |
-| 2. Fine-tuning | top 40 layers unfrozen (BatchNorm frozen) | 1e-4 | 12 |
+| 1. Feature extraction | frozen | 1e-3 | 8 (lite: 3) |
+| 2. Fine-tuning | top 40 layers unfrozen (BatchNorm frozen) | 1e-4 | 12 (lite: 2) |
 
 Early stopping on validation accuracy, then evaluation on the held-out **test** split.
 Besides accuracy we report **macro-F1** (every species counts equally), **top-3 accuracy**
 (the system *recommends* candidates for expert review), and **threatened recall**.
 
-> Runtime: ~10-15 min per model on a Colab T4 GPU. *Runtime -> Change runtime type -> T4 GPU*.
+> Runtime: ~10-15 min per model on a Colab T4 GPU; ~3-6 min per model on a CPU in lite mode. *Runtime -> Change runtime type -> T4 GPU*.
 '''),
     SETUP,
     LOCAL_IMAGES,
@@ -438,7 +450,7 @@ def center_share(hm):
 
 rows = []
 for name, m in loaded.items():
-    for fp in test.sample(min(120, len(test)), random_state=0).filepath:
+    for fp in test.sample(min(config.GRADCAM_SAMPLE, len(test)), random_state=0).filepath:
         _, hm, _, _ = gradcam.explain(m, name, raw(fp))
         rows.append({"model": name, "center_share": center_share(hm)})
 cs = pd.DataFrame(rows)
@@ -493,7 +505,7 @@ labelled *uncertain*, and every output is a **recommendation for expert review**
 automatic identification.
 '''),
     ("code", '''
-needs = inference.fetch_needs_id_observations(client, "Bombus", n=60)
+needs = inference.fetch_needs_id_observations(client, "Bombus", n=config.NEEDS_ID_SAMPLE)
 queue = inference.triage(model, best, needs, redlist, review_threshold=0.5)
 cols = ["url", "place_guess", "observed_on", "pred_label", "confidence", "pred_iucn_code", "review_note", "alternatives"]
 queue[cols].head(20).style.format({"confidence": "{:.0%}"})

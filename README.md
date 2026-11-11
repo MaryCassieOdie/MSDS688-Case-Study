@@ -55,8 +55,10 @@ notebooks/
   03_gradcam_explainability.ipynb       heatmaps, error analysis, attention-on-subject check
   04_identification_and_conservation.ipynb   Needs-ID triage + rule-based recommendations
   _build_notebooks.py                   source the .ipynb files are generated from
+scripts/
+  run_lite.py            run notebooks 01-04 headlessly in lite (CPU test) mode
 src/pollinator_id/
-  config.py              species list, paths, hyperparameters
+  config.py              species list, paths, hyperparameters, full/lite settings
   inaturalist.py         rate-limited iNaturalist API client and downloader
   iucn.py                IUCN Red List lookup (official API or iNaturalist mirror)
   dataset.py             stratified splits, class weights, tf.data pipelines
@@ -87,15 +89,43 @@ assessments that iNaturalist mirrors. To query IUCN directly, request a free tok
 <https://api.iucnredlist.org/users/sign_up> and set `IUCN_API_TOKEN`. On Colab, store it under
 the 🔑 Secrets tab and load it with `userdata.get`.
 
-## Running locally
+## Lite mode: quick local test on a CPU
+Lite mode runs the whole pipeline (all 12 species, all three models, Grad-CAM and the rule
+engine) on a laptop CPU in about 10 minutes (8 minutes in testing, including downloads). It uses the same code paths as a full run, but
+with much less data:
+
+| Setting | Full | Lite |
+|---|---|---|
+| Images per species | 400 | 30 |
+| Image size | 224 px | 160 px |
+| Epochs (head + fine-tune) | 8 + 12 | 3 + 2 |
+| Occurrence sample | 14 years × 200 per species | 4 years × 50 per species |
+| Needs-ID observations triaged | 60 | 12 |
+
+Lite results are **not meaningful**. Use lite mode to check that everything runs, and use full
+mode on a GPU for the numbers in the write-up. Lite data and outputs go to separate
+`data_lite/` and `outputs_lite/` folders, so they never mix with a full run.
+
+Install the dependencies once (Python 3.10 to 3.12):
 ```bash
 pip install -r requirements.txt
 ```
+Run all four notebooks headlessly. `--clean` starts from scratch, and the executed notebooks
+are saved to `outputs_lite/executed/`:
+```bash
+python scripts/run_lite.py --clean
+```
+Or run them interactively:
 ```bash
 cd notebooks && jupyter lab
 ```
-TensorFlow no longer supports GPUs on native Windows, so local training on Windows runs on the
-CPU (slow). Use Colab or WSL2 for GPU training.
+
+In the notebooks, `LITE_MODE` in the first cell defaults to **lite when local and full on
+Colab**. Set it to `True` or `False` to override, then restart the kernel. You can also set the
+environment variable `POLLINATOR_LITE=1`.
+
+TensorFlow no longer supports GPUs on native Windows, so a full local run on Windows uses the
+CPU and is slow. Use Colab or WSL2 for full GPU training.
 
 ## Method summary
 - **Data:** for each species, the most recent research-grade iNaturalist observations

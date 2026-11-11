@@ -222,3 +222,6 @@ __marimo__/
 # Project data and generated outputs (re-creatable from the notebooks)
 /data/
 /outputs/
+/data_lite/
+/outputs_lite/
+/presentation/
